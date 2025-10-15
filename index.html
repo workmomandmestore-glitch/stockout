@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Transfer Stock - โอนสินค้า</title>
+  <style>
+    :root{
+      --brand:#007aff; --muted:#f6f7fb; --text:#222; --border:#e6e8ef;
+    }
+    *{box-sizing:border-box}
+    body{font-family:system-ui,Segoe UI,Roboto,TH Sarabun New,sans-serif;background:#fff;margin:0;color:var(--text)}
+    .wrap{max-width:920px;margin:24px auto;padding:0 16px}
+    .card{background:#fff;border:1px solid var(--border);border-radius:14px;box-shadow:0 2px 12px rgba(0,0,0,.04);margin-bottom:16px;position:relative}
+    .head{background:linear-gradient(90deg,#007aff,#3fa9ff);color:#fff;padding:18px 16px}
+    .head h1{font-size:20px;margin:0}
+    .body{padding:16px}
+    label{display:block;font-weight:600;margin:14px 0 6px}
+    input[type="number"],input[type="text"],input[type="date"],select{
+      width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;outline:none
+    }
+    input:focus,select:focus{border-color:#aee0ff;box-shadow:0 0 0 4px #e4f4ff}
+    .row{display:grid;gap:12px}
+    @media(min-width:720px){ .row{grid-template-columns: 1fr 1fr}}
+    .divider{height:1px;background:var(--border);margin:14px 0}
+    button{background:var(--brand);color:#fff;border:none;border-radius:10px;padding:12px 16px;font-size:16px;cursor:pointer}
+    button:disabled{opacity:.6;cursor:not-allowed}
+    .success{background:#f0fff4;border:1px solid #c7f0d2;color:#146c2e;padding:10px;border-radius:10px}
+    .error{background:#fff5f5;border:1px solid #ffd6d6;color:#b42318;padding:10px;border-radius:10px}
+    .remove-btn{background:#e74c3c;margin-top:10px}
+    .item-title{font-weight:700;margin:6px 0 10px;color:var(--brand)}
+
+    /* autocomplete */
+    .ac-wrap { position: relative; font-size: 15px; }
+    .ac-input { width: 100%; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; outline: none; background: #fff; }
+    .ac-input:focus { border-color: var(--brand); box-shadow: 0 0 0 4px rgba(0,122,255,0.15); }
+    .ac-list { position: absolute; top: 100%; left: 0; right: 0; z-index: 2000; max-height: 280px; overflow-y: auto; background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; margin-top: 6px; box-shadow: 0 6px 20px rgba(0,0,0,.12); }
+    .ac-item { padding: 12px 16px; cursor: pointer; transition: background 0.15s; }
+    .ac-item:hover { background:#f0f8ff; color:var(--brand); font-weight:600; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="head">
+        <h1>โอนสินค้า (Transfer Stock)</h1>
+      </div>
+      <div class="body">
+        <label>วันที่</label>
+        <input type="date" id="dateInput" required />
+
+        <label>โอนสินค้าจาก</label>
+        <select id="fromShopSelect" disabled required>
+          <option value="">— กำลังโหลดร้าน —</option>
+        </select>
+
+        <label>โอนสินค้าไปที่</label>
+        <select id="toShopSelect" disabled required>
+          <option value="">— กำลังโหลดร้าน —</option>
+        </select>
+
+        <div class="divider"></div>
+
+        <div id="items-container"></div>
+        <button style="margin-top:8px" onclick="addItem()">+ เพิ่มรายการสินค้า</button>
+
+        <div class="divider"></div>
+        <button id="btnSubmit" disabled>บันทึกข้อมูล</button>
+        <div id="result" style="margin-top:12px"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+const SPREADSHEET_ID = "1_haVxP6b3pUL9_Bn-UIHh7PlDe2WGYutbyuqfnHSrV8";
+const ITEM_SHEET = "สินค้า";
+const SHOP_SHEET = "stock name list";
+const WEBHOOK_URL = "https://YOUR_N8N_URL/webhook/TransferStock";
+let productList=[], shopList=[];
+
+async function fetchSheet(sheet){
+  try {
+    const url=`https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(sheet)}`;
+    const res=await fetch(url); 
+    const text=await res.text();
+    const jsonStr=text.substring(text.indexOf("{"), text.lastIndexOf("}")+1);
+    const data=JSON.parse(jsonStr);
+    return data.table.rows||[];
+  } catch {
+    alert(`ไม่สามารถดึงข้อมูล ${sheet} จาก Google Sheet`);
+    return [];
+  }
+}
+
+async function loadProducts(){
+  const rows = await fetchSheet(ITEM_SHEET);
+  return rows.map(r=>{
+    const c = r.c || [];
+    const sku  = String(c[0]?.f ?? c[0]?.v ?? "").trim();
+    const name = String(c[1]?.f ?? c[1]?.v ?? "").trim();
+    return {sku,name};
+  }).filter(x=>x.sku && x.name);
+}
+
+async function loadShops(){
+  const rows=await fetchSheet(SHOP_SHEET);
+  return rows.map(r=>{
+    const c=r.c||[];
+    return String(c[0]?.f ?? c[0]?.v ?? "").trim();
+  }).filter(s=>s && s.toLowerCase()!=="shop" && s!=="ร้าน");
+}
+
+function buildItemBlock(){
+  const div=document.createElement('div');
+  div.className='card';
+  div.innerHTML=`
+    <div class="body">
+      <div class="item-title"></div>
+      <label>ค้นหาสินค้า</label>
+      <div class="ac-wrap">
+        <input class="ac-input" type="text" placeholder="พิมพ์ชื่อหรือรหัสสินค้า"/>
+        <div class="ac-list"></div>
+      </div>
+      <div class="row">
+        <div>
+          <label>จำนวน</label>
+          <input class="qty" type="number" min="1" step="1" required/>
+        </div>
+        <div>
+          <label>หมายเหตุ</label>
+          <input class="note" type="text" placeholder="เช่น โอนเติมสต็อก"/>
+        </div>
+      </div>
+      <button class="remove-btn" onclick="this.closest('.card').remove();renumberItems();checkBtnSubmit()">ลบรายการนี้</button>
+    </div>`;
+  div.dataset.sku=""; div.dataset.name="";
+  return div;
+}
+
+function attachAutocomplete(block){
+  const input=block.querySelector('.ac-input');
+  const list=block.querySelector('.ac-list');
+  function close(){list.style.display='none';}
+  function render(items){
+    list.innerHTML="";
+    if(!items.length){close();return;}
+    items.forEach(p=>{
+      const el=document.createElement('div');
+      el.className='ac-item';
+      el.textContent=`${p.name} — ${p.sku}`;
+      el.addEventListener('mousedown',e=>{
+        e.preventDefault();
+        input.value=`${p.name} — ${p.sku}`;
+        block.dataset.sku=p.sku;
+        block.dataset.name=p.name;
+        close(); checkBtnSubmit();
+      });
+      list.appendChild(el);
+    });
+    list.style.display='block';
+  }
+  input.addEventListener('input',()=>{
+    const t=input.value.toLowerCase().trim();
+    render(productList.filter(p=>p.name.toLowerCase().includes(t)||p.sku.toLowerCase().includes(t)).slice(0,500));
+  });
+  input.addEventListener('blur',()=>setTimeout(close,150));
+}
+
+function addItem(){
+  const c=document.getElementById('items-container');
+  const b=buildItemBlock();
+  c.appendChild(b); attachAutocomplete(b); renumberItems(); checkBtnSubmit();
+}
+function renumberItems(){
+  document.querySelectorAll('#items-container .item-title')
+    .forEach((el,i)=>el.textContent=`รายการที่ ${i+1}`);
+}
+
+function validateForm(showErr=false){
+  let ok=true; const errs=[];
+  const date=document.getElementById('dateInput').value;
+  const from=document.getElementById('fromShopSelect').value;
+  const to=document.getElementById('toShopSelect').value;
+  const items=[...document.querySelectorAll('#items-container .card')];
+
+  if(!date){ok=false;errs.push('กรุณาเลือกวันที่');}
+  if(!from){ok=false;errs.push('กรุณาเลือกคลังต้นทาง');}
+  if(!to){ok=false;errs.push('กรุณาเลือกคลังปลายทาง');}
+  if(from===to){ok=false;errs.push('ต้นทางและปลายทางต้องไม่เหมือนกัน');}
+  if(!items.length){ok=false;errs.push('กรุณาเพิ่มสินค้าอย่างน้อย 1 รายการ');}
+
+  items.forEach((b,i)=>{
+    if(!b.dataset.sku){ok=false;errs.push(`รายการที่ ${i+1}: กรุณาเลือกสินค้า`);}
+    const qty=parseInt(b.querySelector('.qty').value||"0",10);
+    if(!(qty>=1)){ok=false;errs.push(`รายการที่ ${i+1}: ใส่จำนวน ≥ 1`);}
+  });
+
+  if(showErr && errs.length)
+    document.getElementById('result').innerHTML=`<div class="error">${errs.join("<br>")}</div>`;
+  else if(showErr)
+    document.getElementById('result').innerHTML="";
+  return ok;
+}
+function checkBtnSubmit(){
+  document.getElementById('btnSubmit').disabled=!validateForm(false);
+}
+
+async function submitPayload(){
+  if(!validateForm(true))return;
+  const date=document.getElementById('dateInput').value;
+  const from=document.getElementById('fromShopSelect').value;
+  const to=document.getElementById('toShopSelect').value;
+  const payloads=[...document.querySelectorAll('#items-container .card')].map(b=>({
+    action:"transfer_stock",
+    date, from_shop:from, to_shop:to,
+    sku:b.dataset.sku,
+    name:b.dataset.name,
+    qty:parseInt(b.querySelector('.qty').value||"0",10),
+    remark:b.querySelector('.note').value
+  }));
+  try{
+    const r=await fetch(WEBHOOK_URL,{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(payloads)
+    });
+    const text=await r.text();
+    document.getElementById('result').innerHTML=`<div class="success">ส่งสำเร็จ 🎉<br><pre>${text}</pre></div>`;
+  }catch(e){
+    document.getElementById('result').innerHTML=`<div class="error">ส่งไม่สำเร็จ: ${e.message}</div>`;
+  }
+}
+
+document.getElementById('btnSubmit').addEventListener('click',submitPayload);
+
+(async function init(){
+  productList=await loadProducts();
+  shopList=await loadShops();
+  const fromSel=document.getElementById('fromShopSelect');
+  const toSel=document.getElementById('toShopSelect');
+  const options=`<option value="">— เลือกร้าน —</option>`+shopList.map(s=>`<option>${s}</option>`).join('');
+  fromSel.innerHTML=options; toSel.innerHTML=options;
+  fromSel.disabled=false; toSel.disabled=false;
+  fromSel.addEventListener('change',checkBtnSubmit);
+  toSel.addEventListener('change',checkBtnSubmit);
+  document.getElementById('dateInput').addEventListener('change',checkBtnSubmit);
+  addItem();
+})();
+</script>
+</body>
+</html>
